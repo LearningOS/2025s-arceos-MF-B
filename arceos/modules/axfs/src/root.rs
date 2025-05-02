@@ -133,12 +133,26 @@ impl VfsNodeOps for RootDirectory {
     }
 
     fn rename(&self, src_path: &str, dst_path: &str) -> VfsResult {
-        self.lookup_mounted_fs(src_path, |fs, rest_path| {
-            if rest_path.is_empty() {
-                ax_err!(PermissionDenied) // cannot rename mount points
-            } else {
-                fs.root_dir().rename(rest_path, dst_path)
+        // 获取源路径和目标路径的绝对路径
+        let abs_src_path = absolute_path(src_path)?;
+        let abs_dst_path = absolute_path(dst_path)?;
+
+        // 寻找源路径对应的挂载点
+        self.lookup_mounted_fs(&abs_src_path, |src_fs, rest_src_path| {
+            if rest_src_path.is_empty() {
+                return ax_err!(PermissionDenied); // 不能重命名挂载点
             }
+
+            // 寻找目标路径对应的挂载点
+            self.lookup_mounted_fs(&abs_dst_path, |dst_fs, rest_dst_path| {
+                // 确保源和目标在同一个文件系统上
+                if !Arc::ptr_eq(&src_fs, &dst_fs) {
+                    return ax_err!(Unsupported); // 跨文件系统重命名不支持
+                }
+
+                // 在同一个文件系统内执行重命名
+                src_fs.root_dir().rename(rest_src_path, rest_dst_path)
+            })
         })
     }
 }

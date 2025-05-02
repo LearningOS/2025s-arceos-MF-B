@@ -67,6 +67,15 @@ impl DirNode {
         children.remove(name);
         Ok(())
     }
+
+    /// Renames a node by the given name in this directory.
+    pub fn rename_node(&self, old: &str, new: &str) -> VfsResult {
+        let mut children = self.children.write();
+        if let Some(node) = children.remove(old) {
+            children.insert(new.into(), node);
+        }
+        Ok(())
+    }
 }
 
 impl VfsNodeOps for DirNode {
@@ -162,6 +171,52 @@ impl VfsNodeOps for DirNode {
             Err(VfsError::InvalidInput) // remove '.' or '..
         } else {
             self.remove_node(name)
+        }
+    }
+
+    fn rename(&self, old: &str, new: &str) -> VfsResult {
+        log::debug!("rename at ramfs: {} -> {}", old, new);
+
+        // 不修改axfs时
+        // 由于无法判断old和new路径是否在同一个MountPoint上,所以默认在MountPoint上
+        // 如果两个路径都以斜杠开头，去掉new的斜杠和下一个名字
+        // if old.starts_with('/') && new.starts_with('/') {
+        //     let (_mount, rest) = split_path(new);
+        //     if let Some(rest) = rest {
+        //         new = rest;
+        //     }else{
+        //         return Err(VfsError::InvalidInput); // 不能rename到根目录
+        //     }
+        // }
+
+        let (old_name, old_rest) = split_path(old);
+        let (new_name, new_rest) = split_path(new);
+
+        if let (Some(old_rest), Some(new_rest)) = (old_rest, new_rest) {
+            // 路径不匹配问题
+            if old_name != new_name {
+                return Err(VfsError::InvalidInput);
+            }
+            match old_name {
+                "" | "." => self.rename(old_rest, new_rest),
+                ".." => self
+                    .parent()
+                    .ok_or(VfsError::NotFound)?
+                    .rename(old_rest, new_rest),
+                _ => {
+                    let subdir = self
+                        .children
+                        .read()
+                        .get(old_name)
+                        .ok_or(VfsError::NotFound)?
+                        .clone();
+                    subdir.rename(old_rest, new_rest)
+                }
+            }
+        } else if old_name.is_empty() || old_name == "." || old_name == ".." {
+            Err(VfsError::InvalidInput) // rename '.' or '..
+        } else {
+            self.rename_node(old_name, new_name)
         }
     }
 
