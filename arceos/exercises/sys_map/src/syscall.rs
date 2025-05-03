@@ -2,11 +2,14 @@
 
 use core::ffi::{c_void, c_char, c_int};
 use axhal::arch::TrapFrame;
-use axhal::trap::{register_trap_handler, SYSCALL};
 use axerrno::LinuxError;
+use axhal::mem::phys_to_virt;
+use axhal::paging::MappingFlags;
+use axhal::trap::{register_trap_handler, SYSCALL};
 use axtask::current;
 use axtask::TaskExtRef;
-use axhal::paging::MappingFlags;
+use memory_addr::VirtAddrRange;
+use axhal::mem::{VirtAddr,MemoryAddr};
 use arceos_posix_api as api;
 
 const SYS_IOCTL: usize = 29;
@@ -100,9 +103,14 @@ bitflags::bitflags! {
 fn handle_syscall(tf: &TrapFrame, syscall_num: usize) -> isize {
     ax_println!("handle_syscall [{}] ...", syscall_num);
     let ret = match syscall_num {
-         SYS_IOCTL => sys_ioctl(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _) as _,
+        SYS_IOCTL => sys_ioctl(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _) as _,
         SYS_SET_TID_ADDRESS => sys_set_tid_address(tf.arg0() as _),
-        SYS_OPENAT => sys_openat(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _, tf.arg3() as _),
+        SYS_OPENAT => sys_openat(
+            tf.arg0() as _,
+            tf.arg1() as _,
+            tf.arg2() as _,
+            tf.arg3() as _,
+        ),
         SYS_CLOSE => sys_close(tf.arg0() as _),
         SYS_READ => sys_read(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _),
         SYS_WRITE => sys_write(tf.arg0() as _, tf.arg1() as _, tf.arg2() as _),
@@ -140,7 +148,69 @@ fn sys_mmap(
     fd: i32,
     _offset: isize,
 ) -> isize {
-    unimplemented!("no sys_mmap!");
+    let mut addr = addr;
+
+    // 获取uspace
+    let task = current();
+    let mut uspace = task.task_ext().aspace.lock();
+    // 获取虚拟地址
+    const USER_ASPACE_BASE: usize = 0x0000;
+    const USER_ASPACE_SIZE: usize = 0x40_0000_0000;
+    if addr.is_null() {
+        let limit = VirtAddrRange::new(USER_ASPACE_BASE.into(), USER_ASPACE_SIZE.into());
+        let vaddr_find = uspace.find_free_area(0.into(), length, limit);
+
+        if vaddr_find.is_none() {
+            return -LinuxError::ENOMEM.code() as _;
+        }
+        let va = vaddr_find.unwrap();
+        addr = va.as_mut_ptr() as *mut usize;
+    }
+
+    let mut is_lazy = true;
+
+    let mut buf = [0u8; 64];
+    // 获取文件内容
+    if fd != -1 {
+        let count = 64;
+        let size = api::sys_read(fd, buf.as_mut_ptr() as *mut c_void, count);
+        if size < 0 {
+            return -LinuxError::EIO.code() as _;
+        }
+        is_lazy = false;
+    }
+
+    // 映射权限
+    let mut flags = MappingFlags::USER;
+    if prot & MmapProt::PROT_READ.bits() != 0 {
+        flags |= MappingFlags::READ;
+    }
+    if prot & MmapProt::PROT_WRITE.bits() != 0 {
+        flags |= MappingFlags::WRITE;
+    }
+    if prot & MmapProt::PROT_EXEC.bits() != 0 {
+        flags |= MappingFlags::EXECUTE;
+    }
+
+    // 映射
+    let vaddr = VirtAddr::from(addr as usize).align_down_4k();
+    let vaddr_end = VirtAddr::from(addr as usize + length).align_up_4k();
+    uspace.map_alloc(vaddr, vaddr_end-vaddr, flags, !is_lazy).unwrap();
+
+    // 复制数据
+    if !is_lazy && fd != -1 {
+        let (paddr, _, _) = uspace
+            .page_table()
+            .query(vaddr.into())
+            .unwrap_or_else(|_| panic!("Mapping failed for segment: {:#x}", vaddr));
+
+        ax_println!("paddr: {:#x}", paddr);
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(buf.as_ptr(), phys_to_virt(paddr).as_mut_ptr(), length);
+        }
+    }
+    vaddr.as_usize() as isize
 }
 
 fn sys_openat(dfd: c_int, fname: *const c_char, flags: c_int, mode: api::ctypes::mode_t) -> isize {

@@ -145,12 +145,11 @@ impl VfsNodeOps for RootDirectory {
 
             // 寻找目标路径对应的挂载点
             self.lookup_mounted_fs(&abs_dst_path, |dst_fs, rest_dst_path| {
-                // 确保源和目标在同一个文件系统上
+                // 不支持跨挂载点重命名
                 if !Arc::ptr_eq(&src_fs, &dst_fs) {
-                    return ax_err!(Unsupported); // 跨文件系统重命名不支持
+                    return ax_err!(Unsupported); 
                 }
 
-                // 在同一个文件系统内执行重命名
                 src_fs.root_dir().rename(rest_src_path, rest_dst_path)
             })
         })
