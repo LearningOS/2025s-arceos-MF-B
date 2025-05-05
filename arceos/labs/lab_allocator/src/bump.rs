@@ -3,8 +3,8 @@ use core::alloc::Layout;
 use core::ptr::NonNull;
 use allocator::AllocError;
 pub struct BumpByteAllocator {
-    start: usize,
-    end: usize,
+    pub start: usize,
+    pub end: usize,
     next: usize,
     count: usize,
 }
@@ -35,8 +35,7 @@ impl BaseAllocator for BumpByteAllocator {
             self.next = start;
             self.end = start + size;
         } else {
-            self.next = start;
-            self.end = start + size;
+            panic!("Memory leak");
         }
         Ok(())
     }
