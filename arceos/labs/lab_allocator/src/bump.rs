@@ -5,7 +5,7 @@ use allocator::AllocError;
 pub struct BumpByteAllocator {
     pub start: usize,
     pub end: usize,
-    next: usize,
+    pub next: usize,
     count: usize,
 }
 

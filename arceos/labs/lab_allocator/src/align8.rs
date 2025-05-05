@@ -37,7 +37,12 @@ impl BaseAllocator for Align8ByteAllocator {
     }
 
     fn add_memory(&mut self, start: usize, size: usize) -> AllocResult {
-        if self.end == start && self.right == start {
+        if self.end == 0 {
+            self.start = start;
+            self.left = start;
+            self.right = start + size;
+            self.end = start + size;
+        }else if self.end == start && self.right == start {
             self.end = start + size;
             self.right = start + size;
         } else {
